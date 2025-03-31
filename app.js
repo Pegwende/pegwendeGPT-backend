@@ -34,7 +34,7 @@ let predefinedAnswers = loadQuestions();
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
-app.get("/peggpt", async (req, res) => {
+app.get("/workgpt", async (req, res) => {
     const userQuestion = req.query.question;
     console.log("userQuestion: ", userQuestion);
 
@@ -56,7 +56,7 @@ app.get("/peggpt", async (req, res) => {
         const result = await model.generateContent({
             contents: [{
                 role: "user",
-                parts: [{ text: `Answer based ONLY on the Bible. Keep the response short (1-5 sentences). Question: ${userQuestion}` }]
+                parts: [{ text: `Provide a professional answer. Keep the response short (1-5 sentences). Question: ${userQuestion}` }]
             }]
         });
         const aiAnswer = result.response.text();
@@ -84,4 +84,4 @@ app.get("/peggpt", async (req, res) => {
 });
 
 const PORT = 8081;
-app.listen(PORT, () => console.log(`WorkGPT is running on port ${PORT}`));
+app.listen(PORT, () => console.log(`Peg-AI is running on port ${PORT}`));
