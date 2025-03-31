@@ -1,7 +1,7 @@
 import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
-import { OpenAI } from "openai";
+import { GoogleGenerativeAI } from "@google/generative-ai";
 import fs from 'fs';
 
 dotenv.config();
@@ -32,9 +32,9 @@ const saveQuestions = (data) => {
 // Load the questions from the JSON file at the start of the server
 let predefinedAnswers = loadQuestions();
 
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
-app.get("/workgpt", async (req, res) => {
+app.get("/peggpt", async (req, res) => {
     const userQuestion = req.query.question;
     console.log("userQuestion: ", userQuestion);
 
@@ -48,15 +48,25 @@ app.get("/workgpt", async (req, res) => {
         return res.json({ answer: predefinedAnswer.answer });
     }
 
+    
     try {
-        // Fallback to OpenAI if predefined answers do not match
-        const response = await openai.chat.completions.create({
-            model: "gpt-3.5-turbo",
-            messages: [{ role: "system", content: "You are an AI assistant for Workday employees." }, 
-                       { role: "user", content: userQuestion }]
-        });
+        // Fallback Generate response using Google Gemini API
+        const model = genAI.getGenerativeModel({ model: "gemini-1.5-pro" });
 
-        const aiAnswer = response.choices[0].message.content;
+        const result = await model.generateContent({
+            contents: [{
+                role: "user",
+                parts: [{ text: `Answer based ONLY on the Bible. Keep the response short (1-5 sentences). Question: ${userQuestion}` }]
+            }]
+        });
+        const aiAnswer = result.response.text();
+        // const response = await openai.chat.completions.create({
+        //     model: "gpt-3.5-turbo",
+        //     messages: [{ role: "system", content: "You are an AI assistant for Workday employees." }, 
+        //                { role: "user", content: userQuestion }]
+        // });
+
+        // const aiAnswer = response.choices[0].message.content;
 
         // Save the new question and answer to the predefined array
         predefinedAnswers.push({ question: userQuestion, answer: aiAnswer });
@@ -69,7 +79,7 @@ app.get("/workgpt", async (req, res) => {
     } catch (error) {
         // If OpenAI is down, send a message indicating that AI is unavailable
         console.error( "error", error );
-        res.send({ answer: "Sorry Pegwende GPT is taking a break! Try again later." });
+        res.send({ answer: "Sorry Peg-AI is taking a break! Try again later." });
     }
 });
 
