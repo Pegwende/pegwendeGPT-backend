@@ -2,84 +2,89 @@ import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
 import { GoogleGenerativeAI } from "@google/generative-ai";
-import fs from 'fs';
+import mysql from "mysql2/promise";
+import axios from "axios";
 
 dotenv.config();
 const app = express();
 app.use(cors());
 app.use(express.json());
 
-// Read the data from the file
-const loadQuestions = () => {
-    try {
-        const data = fs.readFileSync('questions.json', 'utf8');
-        return JSON.parse(data);
-    } catch (error) {
-        console.log("Error reading questions from file:", error);
-        return [];
-    }
-};
+const db = await mysql.createConnection({
+    host: process.env.DB_HOST,
+    user: process.env.DB_USER,
+    password: process.env.DB_PASS,
+    database: process.env.DB_NAME,
+    waitForConnections: true,
+    connectionLimit: 10,
+    queueLimit: 0,
+});
 
-// Save the updated data to the file
-const saveQuestions = (data) => {
-    try {
-        fs.writeFileSync('questions.json', JSON.stringify(data, null, 2));
-    } catch (error) {
-        console.log("Error writing questions to file:", error);
-    }
-};
-
-// Load the questions from the JSON file at the start of the server
-let predefinedAnswers = loadQuestions();
+console.log("Connected to MySQL database");
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
 app.get("/workgpt", async (req, res) => {
     const userQuestion = req.query.question;
-    console.log("userQuestion: ", userQuestion);
+    const userName = req.query.name || "Guest";  // Get user name (or set "Guest")
+    const userEmail = req.query.email || null;   // Get email if available
+    const userIP = req.headers["x-forwarded-for"] || req.connection.remoteAddress; // Get IP address
 
-    // Check if the question matches any predefined ones
-    const predefinedAnswer = predefinedAnswers.find(item => 
-      item.question.toLowerCase() === userQuestion.toLowerCase()
-    );
-
-    if (predefinedAnswer) {
-        // If a predefined answer is found, send it as the response
-        return res.json({ answer: predefinedAnswer.answer });
+    if (!userQuestion) {
+        return res.status(400).json({ error: "Please provide a question" });
     }
 
-    
     try {
-        // Fallback Generate response using Google Gemini API
-        const model = genAI.getGenerativeModel({ model: "gemini-1.5-pro" });
+        // Fetch user location
+        let userLocation = "Unknown";
+        try {
+            const locationResponse = await axios.get(`http://ip-api.com/json/${userIP}`);
+            if (locationResponse.data && locationResponse.data.city) {
+                userLocation = `${locationResponse.data.city}, ${locationResponse.data.country}`;
+            }
+        } catch (error) {
+            console.log("Failed to fetch user location:", error);
+        }
 
-        const result = await model.generateContent({
-            contents: [{
-                role: "user",
-                parts: [{ text: `Provide a professional answer. Keep the response short (1-5 sentences). Question: ${userQuestion}` }]
-            }]
-        });
-        const aiAnswer = result.response.text();
-        // const response = await openai.chat.completions.create({
-        //     model: "gpt-3.5-turbo",
-        //     messages: [{ role: "system", content: "You are an AI assistant for Workday employees." }, 
-        //                { role: "user", content: userQuestion }]
-        // });
+        // Check if question exists in MySQL
+        const [rows] = await db.execute("SELECT id, answer, usage_count FROM questions WHERE question = ?", [userQuestion]);
 
-        // const aiAnswer = response.choices[0].message.content;
+        let aiAnswer;
+        if (rows.length > 0) {
+            // If found, update usage count and return existing answer
+            const questionId = rows[0].id;
+            aiAnswer = rows[0].answer;
+            const newCount = rows[0].usage_count + 1;
+            await db.execute("UPDATE questions SET usage_count = ? WHERE id = ?", [newCount, questionId]);
+        } else {
+            // If not found, generate answer using AI
+            const model = genAI.getGenerativeModel({ model: "gemini-1.5-pro" });
 
-        // Save the new question and answer to the predefined array
-        predefinedAnswers.push({ question: userQuestion, answer: aiAnswer });
+            const result = await model.generateContent({
+                contents: [{
+                    role: "user",
+                    parts: [{ text: `Provide a professional answer. Keep the response short (1-5 sentences). Question: ${userQuestion}` }]
+                }]
+            });
 
-        // Save the updated questions back to the JSON file
-        saveQuestions(predefinedAnswers);
+            aiAnswer = result.response.text();
 
-        // Send the response back to the user
+            // Store new question in MySQL
+            await db.execute("INSERT INTO questions (question, answer, usage_count) VALUES (?, ?, ?)", 
+                [userQuestion, aiAnswer, 1]);
+        }
+
+        // Log user activity
+        await db.execute(
+            "INSERT INTO user_activity (user_name, email, ip_address, location, question, timestamp) VALUES (?, ?, ?, ?, ?, NOW())",
+            [userName, userEmail, userIP, userLocation, userQuestion]
+        );
+
         res.json({ answer: aiAnswer });
+
     } catch (error) {
-        // If OpenAI is down, send a message indicating that AI is unavailable
-        console.error( "error", error );
-        res.send({ answer: "Sorry Peg-AI is taking a break! Try again later." });
+        console.error("Error:", error);
+        res.json({ answer: "Sorry, Peg-AI is taking a break! Try again later." });
     }
 });
 
